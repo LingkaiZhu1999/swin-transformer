@@ -175,9 +175,9 @@ def parse_args():
     parser.add_argument("--patch_size", type=int, default=2)
     parser.add_argument("--window_size", type=int, default=2)
     parser.add_argument("--in_channels", type=int, default=3)
-    parser.add_argument("--d_model", type=int, default=128, help="Embedding dimension (embed_dim)")
-    parser.add_argument("--depths", type=str, default="2,2", help="Comma-separated list, e.g. 2,2 for two stages")
-    parser.add_argument("--num_heads", type=str, default="4,8", help="Comma-separated list, e.g. 4,8 for two stages")
+    parser.add_argument("--d_model", type=int, default=96, help="Embedding dimension (embed_dim)")
+    parser.add_argument("--depths", type=str, default="2,2,6,2", help="Comma-separated list, e.g. 2,2 for two stages")
+    parser.add_argument("--num_heads", type=str, default="3,6,12,24", help="Comma-separated list, e.g. 4,8 for two stages")
     parser.add_argument("--d_ff_ratio", type=int, default=4, help="Feedforward ratio for SwiGLU")
     parser.add_argument("--num_classes", type=int, default=100)
     parser.add_argument("--batch_size", type=int, default=64)
@@ -197,6 +197,12 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    """
+    • Swin-T: C = 96, layer numbers = {2, 2, 6, 2}  
+    • Swin-S: C = 96, layer numbers ={2, 2, 18, 2}  
+    • Swin-B: C = 128, layer numbers ={2, 2, 18, 2}  
+    • Swin-L: C = 192, layer numbers ={2, 2, 18, 2}
+    """
     args = parse_args()
     run = wandb.init(project="Swin Transformer", config=vars(args))
     train(run, args)
