@@ -8,7 +8,7 @@ import argparse
 import wandb
 torch.set_float32_matmul_precision('high')
 
-from transformer import Transformer_VM
+from transformer import SwinTransformer
 from utils import learning_rate_schedule
 
 def evaluate(model, dataloader, criterion, device):
@@ -69,9 +69,21 @@ def train(run, args):
         pin_memory=(device == "cuda"),
     )
 
-    model = Transformer_VM(args.image_size, args.patch_size, args.in_channels,
-                           args.d_model, args.num_heads, args.d_ff, args.num_classes,
-                           args.num_layers).to(device)
+    # Prepare SwinTransformer arguments
+    depths = [int(x) for x in args.depths.split(",")] if isinstance(args.depths, str) else args.depths
+    num_heads = [int(x) for x in args.num_heads.split(",")] if isinstance(args.num_heads, str) else args.num_heads
+    d_ff_ratio = args.d_ff_ratio
+    model = SwinTransformer(
+        image_size=args.image_size,
+        patch_size=args.patch_size,
+        window_size=args.window_size,
+        in_channels=args.in_channels,
+        embed_dim=args.d_model,
+        depths=depths,
+        num_heads=num_heads,
+        d_ff_ratio=d_ff_ratio,
+        num_classes=args.num_classes,
+    ).to(device)
     if args.use_compile:
         model = torch.compile(model)
     criterion = nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
@@ -158,15 +170,16 @@ def train(run, args):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train a Vision Transformer on CIFAR-100")
+    parser = argparse.ArgumentParser(description="Train a Swin Transformer on CIFAR-100")
     parser.add_argument("--image_size", type=int, default=32)
     parser.add_argument("--patch_size", type=int, default=2)
+    parser.add_argument("--window_size", type=int, default=2)
     parser.add_argument("--in_channels", type=int, default=3)
-    parser.add_argument("--d_model", type=int, default=128)
-    parser.add_argument("--num_heads", type=int, default=16)
-    parser.add_argument("--d_ff", type=int, default=256)
+    parser.add_argument("--d_model", type=int, default=128, help="Embedding dimension (embed_dim)")
+    parser.add_argument("--depths", type=str, default="2,2", help="Comma-separated list, e.g. 2,2 for two stages")
+    parser.add_argument("--num_heads", type=str, default="4,8", help="Comma-separated list, e.g. 4,8 for two stages")
+    parser.add_argument("--d_ff_ratio", type=int, default=4, help="Feedforward ratio for SwiGLU")
     parser.add_argument("--num_classes", type=int, default=100)
-    parser.add_argument("--num_layers", type=int, default=4)
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=120)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -179,13 +192,13 @@ def parse_args():
     parser.add_argument("--min_delta", type=float, default=5e-4)
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--use_compile", action="store_true")
-    parser.add_argument("--save_path", type=str, default="vit_cifar100_best.pt")
+    parser.add_argument("--save_path", type=str, default="swin_cifar100_best.pt")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    run = wandb.init(project="ViT", config=vars(args))
+    run = wandb.init(project="Swin Transformer", config=vars(args))
     train(run, args)
 
 
