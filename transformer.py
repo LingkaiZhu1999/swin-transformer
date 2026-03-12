@@ -34,24 +34,6 @@ class PatchMerging(torch.nn.Module):
         x = rearrange(x, "b (h h2 w w2) c -> b (h w) (w2 h2 c)", h2=2, w2=2, h=H//2, w=W//2)
         x = self.rmsnorm(x)
         return self.linear(x)
-    
-# def scaled_dot_product_attention(
-#     keys: torch.Tensor, 
-#     queries: torch.Tensor, 
-#     values: torch.Tensor, 
-#     relative_position_bias: torch.Tensor=None,
-#     mask: torch.Tensor=None) -> torch.Tensor:
-
-#     scores = einsum(queries, keys, "... n d_k, ... m d_k -> ... n m") / math.sqrt(keys.shape[-1])
-#     if mask is not None:
-#         # scores = torch.where(mask, scores, torch.tensor(float('-inf')))
-#         scores = mask + scores
-#     if relative_position_bias is not None:
-#         scores = scores + relative_position_bias
-#     attention_weights = F.softmax(scores, dim=-1)
-#     attention = einsum(attention_weights, values, "... n m, ... m d_v -> ... n d_v")
-#     # mask = torch.where(mask, 0, torch.tensor(float('-inf')))
-#     return attention
 
 
 class WindowMultiheadSelfAttention(torch.nn.Module):
@@ -82,10 +64,11 @@ class WindowMultiheadSelfAttention(torch.nn.Module):
     def forward(self, x: torch.Tensor, shift: bool = False) -> torch.Tensor:
         B, N, C = x.shape
         H = W = int(N ** 0.5)
+        shift_required = shift and (H > self.window_size)
         relative_position_bias = rearrange(self.relative_position_bias_table[rearrange(self.relative_position_index, "w h -> (w h)")], 
                                 "(w h) c -> 1 c w h", 
                                 c=self.num_heads, w=self.window_size ** 2, h=self.window_size ** 2)
-        if shift:
+        if shift_required:
             attn_mask = self.create_attention_mask(H, W, window_size=self.window_size, shift_size=self.window_size//2).to(x.device)
             # (num_windows, ws*ws, ws*ws) -> (B*num_windows, 1, ws*ws, ws*ws)
             attn_mask = repeat(attn_mask, "nw s1 s2 -> (b nw) 1 s1 s2", b=B)
@@ -103,19 +86,30 @@ class WindowMultiheadSelfAttention(torch.nn.Module):
         attention = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask_with_bias)
         attention = rearrange(attention, "... num_heads seq d_v -> ... seq (num_heads d_v)")
         output = self.o_proj(attention)
-        if shift:
+        output = rearrange(output, "(b h w) (wsh wsw) c -> b (h wsh) (w wsw) c", 
+                           wsh=self.window_size, wsw=self.window_size, 
+                           h=H//self.window_size, w=W//self.window_size)
+        if shift_required:
             output = torch.roll(output, shifts=(self.window_size // 2, self.window_size // 2), dims=(1, 2))
-        return rearrange(output, "(b h w) (wsh wsw) c -> b (h wsh w wsw) c", wsh=self.window_size, wsw=self.window_size, h=H//self.window_size, w=W//self.window_size)
+        return rearrange(output, "b h w c -> b (h w) c")
     
     def create_attention_mask(self, feat_height, feat_width, window_size, shift_size):
-        # Number each window, roll, then compare within new windows
-        row = repeat(torch.arange(feat_height), "h -> h w", w=feat_width)
-        col = repeat(torch.arange(feat_width), "w -> h w", h=feat_height)
-        window_ids = (row // window_size) * (feat_width // window_size) + col // window_size
-        window_ids = torch.roll(window_ids, shifts=(-shift_size, -shift_size), dims=(0, 1))
-        window_ids = rearrange(window_ids, "(h wsh) (w wsw) -> (h w) (wsh wsw)", wsh=window_size, wsw=window_size)
-        mask = rearrange(window_ids, "num area -> num area 1") != rearrange(window_ids, "num area -> num 1 area")
-        attn_mask = mask.float() * (-100.0)
+        img_mask = torch.zeros((feat_height, feat_width))
+        
+        # Create regions that correspond to boundaries AFTER shifting
+        h_slices = (slice(0, -window_size), slice(-window_size, -shift_size), slice(-shift_size, None))
+        w_slices = (slice(0, -window_size), slice(-window_size, -shift_size), slice(-shift_size, None))
+        
+        cnt = 0
+        for h in h_slices:
+            for w in w_slices:
+                img_mask[h, w] = cnt
+                cnt += 1
+                
+        # Group into windows and subtract to isolate disconnected sub-regions
+        mask_windows = rearrange(img_mask, "(h wsh) (w wsw) -> (h w) (wsh wsw)", wsh=window_size, wsw=window_size)
+        attn_mask = mask_windows.unsqueeze(1) - mask_windows.unsqueeze(2)
+        attn_mask = attn_mask.masked_fill(attn_mask != 0, float(-100.0)).masked_fill(attn_mask == 0, float(0.0))
         return attn_mask
     
     def compute_relative_position_index(self, window_size: int):
@@ -168,10 +162,9 @@ class SwinTransformer(torch.nn.Module):
         self.window_size = window_size
         self.patch_size = patch_size
         self.patch_dim = in_channels * patch_size * patch_size
-        self.num_patches_per_window = (window_size // patch_size) ** 2
-        self.num_windows = (image_size // window_size) ** 2
 
         self.proj = nn.Linear(self.patch_dim, embed_dim)
+        self.initial_rmsnorm = nn.RMSNorm(embed_dim)
         # self.positional_encoding = nn.Parameter(
         #     torch.nn.init.trunc_normal_(torch.empty(1, self.num_patches_per_window + 1, d_model))
         # )
@@ -224,6 +217,7 @@ class SwinTransformer(torch.nn.Module):
             raise ValueError("Input x must be [B, C, H, W] or [B, N, patch_dim]")
 
         x = self.proj(x)
+        x = self.initial_rmsnorm(x)
 
         for stage in self.stages:
             for block in stage['blocks']:
