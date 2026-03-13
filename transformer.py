@@ -40,7 +40,7 @@ class WindowMultiheadSelfAttention(torch.nn.Module):
     """
     Compute multi-head self-attention within non-overlapping windows of the input feature map.
     """
-    def __init__(self, d_model: int, num_heads: int, window_size: int, patch_size: int):
+    def __init__(self, d_model: int, num_heads: int, window_size: int, patch_size: int, dropout: float = 0.0):
         super().__init__()
         if d_model % num_heads != 0:
             raise ValueError("d_model must be divisible by num_heads")
@@ -60,6 +60,9 @@ class WindowMultiheadSelfAttention(torch.nn.Module):
         ))
         self.register_buffer("relative_position_index", self.compute_relative_position_index(window_size))
         self.o_proj = nn.Linear(d_model, num_heads * self.d_v)
+
+        self.attn_dropout = nn.Dropout(dropout)
+        self.proj_dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, shift: bool = False) -> torch.Tensor:
         B, N, C = x.shape
@@ -84,8 +87,10 @@ class WindowMultiheadSelfAttention(torch.nn.Module):
         K = rearrange(self.k_proj(x), "... seq (num_heads d_k) -> ... num_heads seq d_k", num_heads=self.num_heads)
         V = rearrange(self.v_proj(x), "... seq (num_heads d_v) -> ... num_heads seq d_v", num_heads=self.num_heads)
         attention = F.scaled_dot_product_attention(Q, K, V, attn_mask=attn_mask_with_bias)
+        attention = self.attn_dropout(attention)
         attention = rearrange(attention, "... num_heads seq d_v -> ... seq (num_heads d_v)")
         output = self.o_proj(attention)
+        output = self.proj_dropout(output)
         output = rearrange(output, "(b h w) (wsh wsw) c -> b (h wsh) (w wsw) c", 
                            wsh=self.window_size, wsw=self.window_size, 
                            h=H//self.window_size, w=W//self.window_size)
@@ -132,7 +137,7 @@ class TransformerBlock(torch.nn.Module):
         self.shift = shift
         self.rmsnorm1 = nn.RMSNorm(d_model)
         self.rmsnorm2 = nn.RMSNorm(d_model)
-        self.multihead_self_att = WindowMultiheadSelfAttention(d_model, num_heads, window_size, patch_size)
+        self.multihead_self_att = WindowMultiheadSelfAttention(d_model, num_heads, window_size, patch_size, dropout=0.1)
         self.swiglu = SwiGLU(d_model, d_ff)
 
     def forward(self, x):
