@@ -83,6 +83,7 @@ def train(run, args):
         num_heads=num_heads,
         d_ff_ratio=d_ff_ratio,
         num_classes=args.num_classes,
+        dropout=args.dropout,
     ).to(device)
     if args.use_compile:
         model = torch.compile(model)
@@ -189,6 +190,7 @@ def parse_args():
     parser.add_argument("--weight_decay", type=float, default=5e-2)
     parser.add_argument("--label_smoothing", type=float, default=0.1)
     parser.add_argument("--early_stopping_patience", type=int, default=15)
+    parser.add_argument("--dropout", type=float, default=0.1)
     parser.add_argument("--min_delta", type=float, default=5e-4)
     parser.add_argument("--num_workers", type=int, default=2)
     parser.add_argument("--use_compile", action="store_true")

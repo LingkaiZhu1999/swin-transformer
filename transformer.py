@@ -132,12 +132,12 @@ class WindowMultiheadSelfAttention(torch.nn.Module):
 
 class TransformerBlock(torch.nn.Module):
     "Two successive Swin Transformer blocks"
-    def __init__(self, d_model, num_heads, d_ff, window_size=4, patch_size=2, shift=False):
+    def __init__(self, d_model, num_heads, d_ff, window_size=4, patch_size=2, shift=False, dropout=0.0):
         super().__init__()
         self.shift = shift
         self.rmsnorm1 = nn.RMSNorm(d_model)
         self.rmsnorm2 = nn.RMSNorm(d_model)
-        self.multihead_self_att = WindowMultiheadSelfAttention(d_model, num_heads, window_size, patch_size, dropout=0.1)
+        self.multihead_self_att = WindowMultiheadSelfAttention(d_model, num_heads, window_size, patch_size, dropout=dropout)
         self.swiglu = SwiGLU(d_model, d_ff)
 
     def forward(self, x):
@@ -157,6 +157,7 @@ class SwinTransformer(torch.nn.Module):
         num_heads,        # List of ints: number of heads per stage (e.g., [4, 8, 16, 32])
         d_ff_ratio=4,     # Multiplier to calculate d_ff (SwiGLU hidden dim)
         num_classes=100,
+        dropout=0.0,
     ):
         super().__init__()
         if image_size % patch_size != 0:
@@ -189,7 +190,8 @@ class SwinTransformer(torch.nn.Module):
                     d_ff=current_dim * d_ff_ratio,
                     window_size=window_size,
                     patch_size=patch_size,
-                    shift=(i % 2 != 0) # Alternate shift: False, True, False, True...
+                    shift=(i % 2 != 0), # Alternate shift: False, True, False, True...
+                    dropout=dropout
                 ) for i in range(depths[i_stage])
             ])
             
